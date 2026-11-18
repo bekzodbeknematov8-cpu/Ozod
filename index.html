@@ -135,9 +135,10 @@ canvas{width:100%;display:block}
 'use strict';
 /* ====== Holat va saqlash ====== */
 const LS='ozod-data-v1';
-function defaults(){return{debts:[],tx:[],chat:[],settings:{cur:'soʻm',strategy:'avalanche',extra:null,aiKey:'',aiModel:'gemini-2.5-flash',notified:{},name:''}};}
+function defaults(){return{debts:[],tx:[],chat:[],settings:{cur:'soʻm',strategy:'avalanche',extra:null,aiKey:'',aiModel:'gemini-3.8-flash',notified:{},name:''}};}
 function load(){try{const d=JSON.parse(localStorage.getItem(LS));if(d){const b=defaults();return{...b,...d,settings:{...b.settings,...(d.settings||{})}};}}catch(e){}return defaults();}
 let S=load();
+if(/^gemini-(1\.|2\.)/.test(S.settings.aiModel||'')){S.settings.aiModel='gemini-3.8-flash';}
 function save(){try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}}
 
 /* ====== Yordamchilar ====== */
@@ -486,6 +487,22 @@ function offlineAnswer(q){
   else x=ins.map(o=>`**${o.i} ${o.t}**\n${o.x.replace(/<\/?b>/g,'**')}`).join('\n\n');
   return x+'\n\n_Toʻliq AI javoblari uchun Sozlamalarda Gemini kalitini kiriting._'.replace(/_/g,'');
 }
+async function callGemini(sys,contents,tries=0){
+  const model=S.settings.aiModel||'gemini-3.8-flash';
+  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':S.settings.aiKey},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents})});
+  let j={};try{j=await r.json();}catch(e){}
+  if(!r.ok){
+    const msg=j?.error?.message||('HTTP '+r.status);
+    // Google eski modelni oʻchirgan boʻlsa — tavsiya qilingan yangi modelga avtomatik oʻtamiz
+    const sug=msg.match(/models\/(gemini-[\w.\-]+)/g);
+    const next=sug&&sug.map(s=>s.slice(7)).find(x=>x!==model);
+    if(tries<2&&next&&/no longer|not found|deprecat|not supported|update your code/i.test(msg)){S.settings.aiModel=next;save();return callGemini(sys,contents,tries+1);}
+    if(tries<1&&r.status===404&&model!=='gemini-3.8-flash'){S.settings.aiModel='gemini-3.8-flash';save();return callGemini(sys,contents,tries+1);}
+    if(r.status===429)throw new Error('Bepul limit tugadi, biroz kutib qayta urinib koʻring.');
+    throw new Error(msg);
+  }
+  return(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('').trim()||'Javob olinmadi.';
+}
 async function sendChat(qq){
   const inp=$('#chatIn');const q=(qq||inp?.value||'').trim();if(!q||aiBusy)return;
   S.chat.push({role:'user',text:q});if(S.chat.length>30)S.chat=S.chat.slice(-30);save();
@@ -494,12 +511,9 @@ async function sendChat(qq){
   const sys=`Sen "Ozod" ilovasidagi shaxsiy moliyaviy maslahatchisan. Faqat oʻzbek tilida (lotin yozuvida), samimiy, aniq va qisqa javob ber. Asosiy maqsad — foydalanuvchiga qarzlardan iloji boricha tez va xavfsiz qutulishga yordam berish. Raqamlarni foydalanuvchi maʼlumotlariga asoslab hisobla, aniq summalar va qadamlar ber. Xavfli moliyaviy maslahat (yangi qarz olib qarz yopish, qimor, kripto spekulyatsiya) berma. Muhim qarorlarda mutaxassis bilan maslahatlashishni eslat.\n\nFoydalanuvchining joriy moliyaviy holati (JSON):\n${JSON.stringify(finSummary())}`;
   const contents=S.chat.slice(-12).map(m=>({role:m.role==='user'?'user':'model',parts:[{text:m.text}]}));
   try{
-    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.settings.aiModel||'gemini-2.5-flash')}:generateContent`,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':S.settings.aiKey},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents})});
-    const j=await r.json();
-    if(!r.ok)throw new Error(j?.error?.message||('HTTP '+r.status));
-    const txt=(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('').trim()||'Javob olinmadi.';
+    const txt=await callGemini(sys,contents);
     S.chat.push({role:'ai',text:txt});
-  }catch(e){S.chat.push({role:'ai',text:'⚠️ AI bilan bogʻlanib boʻlmadi: '+e.message+'\n\nKalit va model nomini tekshiring. Hozircha oflayn tahlil:\n\n'+offlineAnswer(q)});}
+  }catch(e){S.chat.push({role:'ai',text:'⚠️ AI bilan bogʻlanib boʻlmadi: '+e.message+'\n\nKalitni tekshiring. Hozircha oflayn tahlil:\n\n'+offlineAnswer(q)});}
   aiBusy=false;save();render();
 }
 
@@ -580,7 +594,7 @@ document.addEventListener('click',e=>{
     case'autoExtra':S.settings.extra=null;save();render();break;
     case'ask':sendChat(el.dataset.q);break;
     case'clearChat':S.chat=[];save();render();break;
-    case'saveSet':{const n=$('#sName'),cu=$('#sCur'),k=$('#sKey'),m=$('#sModel');if(n)S.settings.name=n.value.trim();if(cu)S.settings.cur=cu.value;if(k)S.settings.aiKey=k.value.trim();if(m)S.settings.aiModel=m.value.trim()||'gemini-2.5-flash';save();toast('Saqlandi ✅');break;}
+    case'saveSet':{const n=$('#sName'),cu=$('#sCur'),k=$('#sKey'),m=$('#sModel');if(n)S.settings.name=n.value.trim();if(cu)S.settings.cur=cu.value;if(k)S.settings.aiKey=k.value.trim();if(m)S.settings.aiModel=m.value.trim()||'gemini-3.8-flash';save();toast('Saqlandi ✅');break;}
     case'notif':if(!('Notification' in window)){toast('Bu brauzer bildirishnomani qoʻllamaydi');break;}Notification.requestPermission().then(p=>{toast(p==='granted'?'Bildirishnomalar yoqildi 🔔':'Ruxsat berilmadi');checkReminders();});break;
     case'export':download(new Blob([JSON.stringify(S,null,2)],{type:'application/json'}),'ozod-zaxira-'+ymd(new Date())+'.json');break;
     case'import':$('#impFile').click();break;

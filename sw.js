@@ -1,5 +1,5 @@
 // Ozod — oflayn ishlash uchun service worker
-const CACHE = 'ozod-v1';
+const CACHE = 'ozod-v2';
 const FILES = ['./', 'index.html', 'manifest.json', 'icon.svg'];
 
 self.addEventListener('install', e => {
